@@ -11,7 +11,6 @@ import {
   YAxis,
 } from "recharts";
 import {
-  Check,
   ChevronLeft,
   ChevronRight,
   Flame,
@@ -24,14 +23,9 @@ import {
   TrendingUp,
   Weight,
 } from "lucide-react";
-import type { ChangeEvent, FormEvent } from "react";
+import type { FormEvent } from "react";
 import { useEffect, useMemo, useState } from "react";
-import {
-  calculateTargets,
-  roundNutrition,
-  sumNutrition,
-  type NutritionTotals,
-} from "@/lib/calculations";
+import { roundNutrition, sumNutrition, type NutritionTotals } from "@/lib/calculations";
 
 type Profile = {
   sex: "female" | "male";
@@ -122,37 +116,19 @@ type Props = {
   signOutHref: string;
 };
 
-const defaultProfile: Profile = {
-  sex: "male",
-  age: 25,
-  heightCm: 178,
-  weightKg: 78,
-  activityLevel: "moderate",
-  goal: "maintain",
-  weeklyChangeKg: 0,
-};
-
-const today = dateKey(new Date());
-
 export default function TrackerDashboard({ user, signOutHref }: Props) {
-  const [profile, setProfile] = useState<Profile>(defaultProfile);
+  const [profile, setProfile] = useState<Profile | null>(null);
   const [targets, setTargets] = useState<Targets | null>(null);
   const [meals, setMeals] = useState<SavedMeal[]>([]);
   const [weights, setWeights] = useState<WeightEntry[]>([]);
   const [mealText, setMealText] = useState("");
   const [estimate, setEstimate] = useState<EstimatedMeal | null>(null);
-  const [weightInput, setWeightInput] = useState({
-    entryDate: today,
-    weightKg: defaultProfile.weightKg,
-  });
   const [dayOffset, setDayOffset] = useState(0);
   const [range, setRange] = useState(30);
   const [showEstimator, setShowEstimator] = useState(false);
   const [loading, setLoading] = useState(true);
   const [estimating, setEstimating] = useState(false);
-  const [savingProfile, setSavingProfile] = useState(false);
   const [savingMeal, setSavingMeal] = useState(false);
-  const [savingWeight, setSavingWeight] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -160,11 +136,9 @@ export default function TrackerDashboard({ user, signOutHref }: Props) {
     void refreshAll();
   }, []);
 
-  const targetSpec = useMemo(() => targets ?? calculateTargets(profile), [targets, profile]);
-
   const days = useMemo(
-    () => buildDayRecords(meals, weights, profile.weightKg),
-    [meals, weights, profile.weightKg],
+    () => buildDayRecords(meals, weights),
+    [meals, weights],
   );
 
   const lastIndex = days.length - 1;
@@ -177,13 +151,18 @@ export default function TrackerDashboard({ user, signOutHref }: Props) {
   const avgConsumed = Math.round(
     last7.reduce((sum, day) => sum + day.consumed, 0) / Math.max(1, last7.length),
   );
-  const avgDeviation = avgConsumed - targetSpec.targetCalories;
-  const currentWeight = latestWeight(weights, profile.weightKg);
-  const weightSevenDaysAgo = weightAtOffset(days, 7) ?? currentWeight;
-  const weightChange7 = round(currentWeight - weightSevenDaysAgo, 1);
+  const hasMealData = meals.length > 0;
+  const avgDeviation = targets && hasMealData ? avgConsumed - targets.targetCalories : null;
+  const currentWeight = latestWeight(weights);
+  const weightSevenDaysAgo = currentWeight === null ? null : weightAtOffset(days, 7);
+  const weightChange7 =
+    currentWeight === null || weightSevenDaysAgo === null
+      ? null
+      : round(currentWeight - weightSevenDaysAgo, 1);
   const goalWeight = deriveGoalWeight(profile, currentWeight);
   const weeksToGoal = projectedWeeks(profile, currentWeight, goalWeight);
-  const etaLabel = projectedDateLabel(weeksToGoal);
+  const etaLabel = weeksToGoal === null ? null : projectedDateLabel(weeksToGoal);
+  const hasWeightData = chartData.some((day) => day.weightKg !== null);
 
   async function refreshAll() {
     setLoading(true);
@@ -195,13 +174,7 @@ export default function TrackerDashboard({ user, signOutHref }: Props) {
         apiGet<{ weights: WeightEntry[] }>("/api/weights?days=180"),
       ]);
 
-      if (profileResponse.profile) {
-        setProfile(profileResponse.profile);
-        setWeightInput((current) => ({
-          ...current,
-          weightKg: profileResponse.profile?.weightKg ?? current.weightKg,
-        }));
-      }
+      setProfile(profileResponse.profile);
       setTargets(profileResponse.targets);
       setMeals(mealsResponse.meals);
       setWeights(weightsResponse.weights);
@@ -209,27 +182,6 @@ export default function TrackerDashboard({ user, signOutHref }: Props) {
       setError(errorMessage(err));
     } finally {
       setLoading(false);
-    }
-  }
-
-  async function saveProfile() {
-    setSavingProfile(true);
-    setError(null);
-    setMessage(null);
-    try {
-      const result = await apiSend<{ profile: Profile; targets: Targets }>(
-        "/api/profile",
-        "PUT",
-        profile,
-      );
-      setProfile(result.profile);
-      setTargets(result.targets);
-      setWeightInput((current) => ({ ...current, weightKg: result.profile.weightKg }));
-      setMessage("Calibration saved.");
-    } catch (err) {
-      setError(errorMessage(err));
-    } finally {
-      setSavingProfile(false);
     }
   }
 
@@ -277,21 +229,6 @@ export default function TrackerDashboard({ user, signOutHref }: Props) {
     }
   }
 
-  async function saveWeight() {
-    setSavingWeight(true);
-    setError(null);
-    setMessage(null);
-    try {
-      await apiSend("/api/weights", "POST", weightInput);
-      setMessage("Weight check-in saved.");
-      await refreshAll();
-    } catch (err) {
-      setError(errorMessage(err));
-    } finally {
-      setSavingWeight(false);
-    }
-  }
-
   function openEstimator() {
     setDayOffset(0);
     setShowEstimator(true);
@@ -305,8 +242,8 @@ export default function TrackerDashboard({ user, signOutHref }: Props) {
       <div className="shell">
         <header className="cal-header">
           <div>
-            <p className="wordmark">MACRO</p>
-            <p className="tagline">AI intake calibration</p>
+            <p className="wordmark">CALIBRATE</p>
+            <p className="tagline">Precision intake tracking</p>
           </div>
           <div className="header-controls">
             <div className="day-nav">
@@ -329,7 +266,7 @@ export default function TrackerDashboard({ user, signOutHref }: Props) {
               </button>
             </div>
             <button className="btn-primary" onClick={openEstimator}>
-              <Sparkles size={15} /> Log with AI
+              <Plus size={15} /> Log entry
             </button>
             <a
               className="nav-btn signout"
@@ -351,18 +288,22 @@ export default function TrackerDashboard({ user, signOutHref }: Props) {
             </div>
             <CalorieDial
               value={selectedDay.consumed}
-              target={targetSpec.targetCalories}
-              maintenance={targetSpec.maintenanceCalories}
-              caption={readingCaption(selectedDay, isToday, targetSpec)}
+              target={targets?.targetCalories ?? 0}
+              maintenance={targets?.maintenanceCalories ?? 0}
+              caption={
+                targets
+                  ? readingCaption(selectedDay, isToday, targets)
+                  : "No target calibrated"
+              }
             />
             <div className="dial-legend">
               <span className="legend-item">
                 <span className="legend-dot" style={{ background: "var(--teal)" }} /> Target{" "}
-                {targetSpec.targetCalories.toLocaleString()}
+                {formatPlainNumber(targets?.targetCalories)}
               </span>
               <span className="legend-item">
                 <span className="legend-dot" style={{ background: "var(--rust)" }} /> Maint.{" "}
-                {targetSpec.maintenanceCalories.toLocaleString()}
+                {formatPlainNumber(targets?.maintenanceCalories)}
               </span>
             </div>
           </div>
@@ -372,32 +313,36 @@ export default function TrackerDashboard({ user, signOutHref }: Props) {
             <div className="readout-row">
               <span className="readout-label">Maintenance</span>
               <span className="readout-value">
-                {targetSpec.maintenanceCalories.toLocaleString()} kcal
+                {formatKcal(targets?.maintenanceCalories)}
               </span>
             </div>
             <div className="readout-row">
               <span className="readout-label">
                 Daily target
-                <span className="readout-sub">
-                  &nbsp;· {signed(targetSpec.targetCalories - targetSpec.maintenanceCalories)} kcal/day
-                </span>
+                {targets ? (
+                  <span className="readout-sub">
+                    &nbsp;· {signed(targets.targetCalories - targets.maintenanceCalories)} kcal/day
+                  </span>
+                ) : null}
               </span>
               <span className="readout-value">
-                {targetSpec.targetCalories.toLocaleString()} kcal
+                {formatKcal(targets?.targetCalories)}
               </span>
             </div>
             <div className="readout-row">
               <span className="readout-label">7-day avg intake</span>
               <span className="readout-value">
-                {avgConsumed.toLocaleString()} kcal
-                <span
-                  style={{
-                    color: avgDeviation <= 0 ? "var(--teal)" : "var(--rust)",
-                    fontSize: 11,
-                  }}
-                >
-                  ({signed(avgDeviation)})
-                </span>
+                {hasMealData ? `${avgConsumed.toLocaleString()} kcal` : "—"}
+                {avgDeviation === null ? null : (
+                  <span
+                    style={{
+                      color: avgDeviation <= 0 ? "var(--teal)" : "var(--rust)",
+                      fontSize: 11,
+                    }}
+                  >
+                    ({signed(avgDeviation)})
+                  </span>
+                )}
               </span>
             </div>
 
@@ -408,112 +353,41 @@ export default function TrackerDashboard({ user, signOutHref }: Props) {
                 <Weight size={13} /> Current weight
               </span>
               <span className="readout-value">
-                {currentWeight.toFixed(1)} kg
-                <span
-                  style={{
-                    color: weightChange7 <= 0 ? "var(--teal)" : "var(--rust)",
-                    display: "flex",
-                    alignItems: "center",
-                  }}
-                >
-                  {weightChange7 <= 0 ? <TrendingDown size={13} /> : <TrendingUp size={13} />}
-                  {Math.abs(weightChange7).toFixed(1)}
-                </span>
+                {formatKg(currentWeight)}
+                {weightChange7 === null ? null : (
+                  <span
+                    style={{
+                      color: weightChange7 <= 0 ? "var(--teal)" : "var(--rust)",
+                      display: "flex",
+                      alignItems: "center",
+                    }}
+                  >
+                    {weightChange7 <= 0 ? <TrendingDown size={13} /> : <TrendingUp size={13} />}
+                    {Math.abs(weightChange7).toFixed(1)}
+                  </span>
+                )}
               </span>
             </div>
             <div className="readout-row">
               <span className="readout-label">Goal weight</span>
-              <span className="readout-value">{goalWeight.toFixed(1)} kg</span>
+              <span className="readout-value">{formatKg(goalWeight)}</span>
             </div>
             <div className="readout-row">
               <span className="readout-label">Pace</span>
               <span className="readout-value">
-                {profile.goal === "maintain" ? "maintain" : `${profile.weeklyChangeKg} kg / wk`}
+                {profile ? paceLabel(profile) : "—"}
               </span>
             </div>
             <div className="readout-row">
               <span className="readout-label">Projected</span>
               <span className="readout-value">
-                {weeksToGoal < 0.1 ? "Goal reached" : `${etaLabel} · ~${weeksToGoal.toFixed(1)} wks`}
+                {weeksToGoal === null
+                  ? "—"
+                  : weeksToGoal < 0.1
+                    ? "Goal reached"
+                    : `${etaLabel} · ~${weeksToGoal.toFixed(1)} wks`}
               </span>
             </div>
-
-            <form className="profile-grid" onSubmit={(event) => void submitProfile(event, saveProfile)}>
-              <SelectField
-                label="Sex"
-                value={profile.sex}
-                onChange={(value) => setProfile({ ...profile, sex: value as Profile["sex"] })}
-                options={[
-                  ["male", "Male"],
-                  ["female", "Female"],
-                ]}
-              />
-              <NumberField
-                label="Age"
-                value={profile.age}
-                min={13}
-                max={100}
-                onChange={(value) => setProfile({ ...profile, age: value })}
-              />
-              <NumberField
-                label="Height cm"
-                value={profile.heightCm}
-                min={100}
-                max={240}
-                onChange={(value) => setProfile({ ...profile, heightCm: value })}
-              />
-              <NumberField
-                label="Weight kg"
-                value={profile.weightKg}
-                min={30}
-                max={300}
-                step={0.1}
-                onChange={(value) => setProfile({ ...profile, weightKg: value })}
-              />
-              <SelectField
-                label="Activity"
-                value={profile.activityLevel}
-                onChange={(value) =>
-                  setProfile({ ...profile, activityLevel: value as Profile["activityLevel"] })
-                }
-                options={[
-                  ["sedentary", "Sedentary"],
-                  ["light", "Light"],
-                  ["moderate", "Moderate"],
-                  ["active", "Active"],
-                  ["very_active", "Very active"],
-                ]}
-              />
-              <SelectField
-                label="Goal"
-                value={profile.goal}
-                onChange={(value) =>
-                  setProfile({
-                    ...profile,
-                    goal: value as Profile["goal"],
-                    weeklyChangeKg: value === "maintain" ? 0 : Math.max(profile.weeklyChangeKg, 0.25),
-                  })
-                }
-                options={[
-                  ["lose", "Lose"],
-                  ["maintain", "Maintain"],
-                  ["gain", "Gain"],
-                ]}
-              />
-              <NumberField
-                label="kg / wk"
-                value={profile.weeklyChangeKg}
-                min={0}
-                max={1.5}
-                step={0.1}
-                disabled={profile.goal === "maintain"}
-                onChange={(value) => setProfile({ ...profile, weeklyChangeKg: value })}
-              />
-              <button className="btn-primary profile-save" disabled={savingProfile} type="submit">
-                {savingProfile ? <Loader2 className="spin" size={15} /> : <Check size={15} />}
-                Save
-              </button>
-            </form>
           </div>
         </div>
 
@@ -523,19 +397,19 @@ export default function TrackerDashboard({ user, signOutHref }: Props) {
             <MacroBar
               label="Protein"
               value={selectedDay.protein}
-              target={targetSpec.macroTargets.proteinG}
+              target={targets?.macroTargets.proteinG ?? null}
               color="var(--brass)"
             />
             <MacroBar
               label="Carbs"
               value={selectedDay.carbs}
-              target={targetSpec.macroTargets.carbsG}
+              target={targets?.macroTargets.carbsG ?? null}
               color="var(--teal)"
             />
             <MacroBar
               label="Fat"
               value={selectedDay.fat}
-              target={targetSpec.macroTargets.fatG}
+              target={targets?.macroTargets.fatG ?? null}
               color="var(--rust)"
             />
           </div>
@@ -581,28 +455,32 @@ export default function TrackerDashboard({ user, signOutHref }: Props) {
                 width={44}
               />
               <Tooltip content={<CalorieTooltip />} />
-              <ReferenceLine
-                y={targetSpec.targetCalories}
-                stroke="var(--teal)"
-                strokeDasharray="4 4"
-                label={{
-                  value: "Target",
-                  position: "insideTopRight",
-                  fontSize: 10,
-                  fill: "var(--teal)",
-                }}
-              />
-              <ReferenceLine
-                y={targetSpec.maintenanceCalories}
-                stroke="var(--rust)"
-                strokeDasharray="4 4"
-                label={{
-                  value: "Maintenance",
-                  position: "insideTopRight",
-                  fontSize: 10,
-                  fill: "var(--rust)",
-                }}
-              />
+              {targets ? (
+                <>
+                  <ReferenceLine
+                    y={targets.targetCalories}
+                    stroke="var(--teal)"
+                    strokeDasharray="4 4"
+                    label={{
+                      value: "Target",
+                      position: "insideTopRight",
+                      fontSize: 10,
+                      fill: "var(--teal)",
+                    }}
+                  />
+                  <ReferenceLine
+                    y={targets.maintenanceCalories}
+                    stroke="var(--rust)"
+                    strokeDasharray="4 4"
+                    label={{
+                      value: "Maintenance",
+                      position: "insideTopRight",
+                      fontSize: 10,
+                      fill: "var(--rust)",
+                    }}
+                  />
+                </>
+              ) : null}
               <Area
                 type="monotone"
                 dataKey="consumed"
@@ -619,31 +497,6 @@ export default function TrackerDashboard({ user, signOutHref }: Props) {
             <div className="eyebrow" style={{ marginBottom: 0 }}>
               Weight trend
             </div>
-            <form className="weight-inline" onSubmit={(event) => void submitWeight(event, saveWeight)}>
-              <input
-                type="date"
-                value={weightInput.entryDate}
-                onChange={(event) =>
-                  setWeightInput({ ...weightInput, entryDate: event.target.value })
-                }
-                aria-label="Weight date"
-              />
-              <input
-                type="number"
-                min={30}
-                max={300}
-                step={0.1}
-                value={weightInput.weightKg}
-                onChange={(event) =>
-                  setWeightInput({ ...weightInput, weightKg: Number(event.target.value) })
-                }
-                aria-label="Weight kg"
-              />
-              <button className="btn-ghost" type="submit" disabled={savingWeight}>
-                {savingWeight ? <Loader2 className="spin" size={14} /> : <Plus size={14} />}
-                Check-in
-              </button>
-            </form>
           </div>
           <ResponsiveContainer width="100%" height={200}>
             <AreaChart data={chartData} margin={{ top: 16, right: 8, left: -12, bottom: 0 }}>
@@ -662,24 +515,26 @@ export default function TrackerDashboard({ user, signOutHref }: Props) {
                 tickLine={false}
               />
               <YAxis
-                domain={["dataMin - 1", "dataMax + 1"]}
+                domain={hasWeightData ? ["dataMin - 1", "dataMax + 1"] : [0, 1]}
                 tick={{ fontSize: 10, fill: "var(--muted)" }}
                 axisLine={false}
                 tickLine={false}
                 width={44}
               />
               <Tooltip content={<WeightTooltip />} />
-              <ReferenceLine
-                y={goalWeight}
-                stroke="var(--brass)"
-                strokeDasharray="4 4"
-                label={{
-                  value: "Goal",
-                  position: "insideTopRight",
-                  fontSize: 10,
-                  fill: "var(--brass)",
-                }}
-              />
+              {goalWeight === null ? null : (
+                <ReferenceLine
+                  y={goalWeight}
+                  stroke="var(--brass)"
+                  strokeDasharray="4 4"
+                  label={{
+                    value: "Goal",
+                    position: "insideTopRight",
+                    fontSize: 10,
+                    fill: "var(--brass)",
+                  }}
+                />
+              )}
               <Area
                 type="monotone"
                 dataKey="weightKg"
@@ -699,13 +554,13 @@ export default function TrackerDashboard({ user, signOutHref }: Props) {
             </div>
             {!showEstimator && (
               <button className="btn-ghost" onClick={openEstimator}>
-                <Sparkles size={14} /> Estimate meal
+                + Add entry
               </button>
             )}
           </div>
 
           {showEstimator && (
-            <form className="ai-entry" onSubmit={estimateMeal}>
+            <form className="entry-form ai-entry" onSubmit={estimateMeal}>
               <div className="field">
                 <label>Meal description</label>
                 <textarea
@@ -722,7 +577,7 @@ export default function TrackerDashboard({ user, signOutHref }: Props) {
                   disabled={estimating || mealText.trim().length < 2}
                 >
                   {estimating ? <Loader2 className="spin" size={15} /> : <Sparkles size={15} />}
-                  Estimate
+                  Add
                 </button>
                 <button
                   type="button"
@@ -811,12 +666,19 @@ function CalorieDial({
   const cx = 120;
   const cy = 130;
   const r = 92;
-  const max = Math.max(maintenance * 1.15, target * 1.15, 1);
+  const hasTarget = target > 0;
+  const hasMaintenance = maintenance > 0;
+  const max = Math.max(maintenance * 1.15, target * 1.15, value * 1.15, 1);
   const frac = Math.max(0, Math.min(1, value / max));
   const valueAngle = START_ANGLE + frac * SWEEP;
   const targetAngle = START_ANGLE + Math.min(1, target / max) * SWEEP;
   const maintAngle = START_ANGLE + Math.min(1, maintenance / max) * SWEEP;
-  const status = value <= target ? "var(--teal)" : value <= maintenance ? "var(--brass)" : "var(--rust)";
+  const status =
+    hasTarget && value <= target
+      ? "var(--teal)"
+      : hasMaintenance && value <= maintenance
+        ? "var(--brass)"
+        : "var(--rust)";
   const ticks = Array.from({ length: 21 }, (_, index) => index / 20);
 
   return (
@@ -843,8 +705,12 @@ function CalorieDial({
           />
         );
       })}
-      <circle cx={polar(cx, cy, r, targetAngle)[0]} cy={polar(cx, cy, r, targetAngle)[1]} r="3.5" className="tick-target" />
-      <circle cx={polar(cx, cy, r, maintAngle)[0]} cy={polar(cx, cy, r, maintAngle)[1]} r="3.5" className="tick-maint" />
+      {hasTarget ? (
+        <circle cx={polar(cx, cy, r, targetAngle)[0]} cy={polar(cx, cy, r, targetAngle)[1]} r="3.5" className="tick-target" />
+      ) : null}
+      {hasMaintenance ? (
+        <circle cx={polar(cx, cy, r, maintAngle)[0]} cy={polar(cx, cy, r, maintAngle)[1]} r="3.5" className="tick-maint" />
+      ) : null}
       <line
         x1={cx}
         y1={cy}
@@ -871,17 +737,17 @@ function MacroBar({
 }: {
   label: string;
   value: number;
-  target: number;
+  target: number | null;
   color: string;
 }) {
-  const pct = Math.min(100, (value / Math.max(target, 1)) * 100);
+  const pct = target ? Math.min(100, (value / Math.max(target, 1)) * 100) : 0;
   return (
     <div className="macro-bar">
       <div className="macro-bar-head">
         <span className="macro-label">{label}</span>
         <span className="macro-value">
           {Math.round(value)}
-          <span className="macro-sep"> / {Math.round(target)}g</span>
+          <span className="macro-sep"> / {target ? Math.round(target) : "—"}g</span>
         </span>
       </div>
       <div className="macro-track">
@@ -920,65 +786,7 @@ function WeightTooltip({ active, payload, label }: ChartTooltipProps) {
   );
 }
 
-function SelectField({
-  label,
-  value,
-  options,
-  onChange,
-}: {
-  label: string;
-  value: string;
-  options: Array<[string, string]>;
-  onChange: (value: string) => void;
-}) {
-  return (
-    <label className="field compact">
-      <span>{label}</span>
-      <select value={value} onChange={(event) => onChange(event.target.value)}>
-        {options.map(([optionValue, optionLabel]) => (
-          <option key={optionValue} value={optionValue}>
-            {optionLabel}
-          </option>
-        ))}
-      </select>
-    </label>
-  );
-}
-
-function NumberField({
-  label,
-  value,
-  onChange,
-  min,
-  max,
-  step = 1,
-  disabled = false,
-}: {
-  label: string;
-  value: number;
-  onChange: (value: number) => void;
-  min: number;
-  max: number;
-  step?: number;
-  disabled?: boolean;
-}) {
-  return (
-    <label className="field compact">
-      <span>{label}</span>
-      <input
-        type="number"
-        min={min}
-        max={max}
-        step={step}
-        value={value}
-        disabled={disabled}
-        onChange={(event: ChangeEvent<HTMLInputElement>) => onChange(Number(event.target.value))}
-      />
-    </label>
-  );
-}
-
-function buildDayRecords(meals: SavedMeal[], weights: WeightEntry[], profileWeight: number) {
+function buildDayRecords(meals: SavedMeal[], weights: WeightEntry[]) {
   const mealsByDate = new Map<string, SavedMeal[]>();
   for (const meal of meals) {
     const key = meal.eatenAt.slice(0, 10);
@@ -986,9 +794,7 @@ function buildDayRecords(meals: SavedMeal[], weights: WeightEntry[], profileWeig
   }
 
   const weightsByDate = new Map(weights.map((entry) => [entry.entryDate, entry.weightKg]));
-  let lastKnownWeight = weights
-    .slice()
-    .sort((a, b) => a.entryDate.localeCompare(b.entryDate))[0]?.weightKg ?? profileWeight;
+  let lastKnownWeight: number | null = null;
 
   return Array.from({ length: 90 }, (_, index) => {
     const date = new Date();
@@ -1058,8 +864,8 @@ function arcPath(cx: number, cy: number, r: number, a0: number, a1: number) {
   return `M ${x0} ${y0} A ${r} ${r} 0 ${large} 1 ${x1} ${y1}`;
 }
 
-function latestWeight(weights: WeightEntry[], fallback: number) {
-  return weights.slice().sort((a, b) => a.entryDate.localeCompare(b.entryDate)).at(-1)?.weightKg ?? fallback;
+function latestWeight(weights: WeightEntry[]) {
+  return weights.slice().sort((a, b) => a.entryDate.localeCompare(b.entryDate)).at(-1)?.weightKg ?? null;
 }
 
 function weightAtOffset(days: DayRecord[], offset: number) {
@@ -1067,13 +873,19 @@ function weightAtOffset(days: DayRecord[], offset: number) {
   return days[index]?.weightKg ?? null;
 }
 
-function deriveGoalWeight(profile: Profile, currentWeight: number) {
+function deriveGoalWeight(profile: Profile | null, currentWeight: number | null) {
+  if (!profile || currentWeight === null) return null;
   if (profile.goal === "lose") return Math.max(30, currentWeight - 5);
   if (profile.goal === "gain") return Math.min(300, currentWeight + 5);
   return currentWeight;
 }
 
-function projectedWeeks(profile: Profile, currentWeight: number, goalWeight: number) {
+function projectedWeeks(
+  profile: Profile | null,
+  currentWeight: number | null,
+  goalWeight: number | null,
+) {
+  if (!profile || currentWeight === null || goalWeight === null) return null;
   if (profile.goal === "maintain" || profile.weeklyChangeKg <= 0) return 0;
   return Math.max(0, Math.abs(currentWeight - goalWeight) / profile.weeklyChangeKg);
 }
@@ -1101,14 +913,20 @@ function round(value: number, decimals = 1) {
   return Math.round(value * factor) / factor;
 }
 
-async function submitProfile(event: FormEvent<HTMLFormElement>, saveProfile: () => Promise<void>) {
-  event.preventDefault();
-  await saveProfile();
+function formatPlainNumber(value: number | null | undefined) {
+  return typeof value === "number" ? value.toLocaleString() : "—";
 }
 
-async function submitWeight(event: FormEvent<HTMLFormElement>, saveWeight: () => Promise<void>) {
-  event.preventDefault();
-  await saveWeight();
+function formatKcal(value: number | null | undefined) {
+  return typeof value === "number" ? `${value.toLocaleString()} kcal` : "—";
+}
+
+function formatKg(value: number | null) {
+  return typeof value === "number" ? `${value.toFixed(1)} kg` : "—";
+}
+
+function paceLabel(profile: Profile) {
+  return profile.goal === "maintain" ? "maintain" : `${profile.weeklyChangeKg} kg / wk`;
 }
 
 async function apiGet<T>(url: string): Promise<T> {
@@ -1289,23 +1107,15 @@ const calibrateStyles = `
     display: block; font-size: 10px; color: var(--muted); margin-bottom: 4px;
     text-transform: uppercase; letter-spacing: 0.06em;
   }
-  .field input, .field textarea, .field select, .weight-inline input {
+  .field input, .field textarea {
     width: 100%; background: var(--bg); border: 1px solid var(--line); color: var(--ink);
     border-radius: 4px; padding: 7px 9px; font-family: 'Inter', sans-serif; font-size: 13px;
   }
   .field textarea { min-height: 78px; resize: vertical; }
-  .field input:focus, .field textarea:focus, .field select:focus, .weight-inline input:focus {
+  .field input:focus, .field textarea:focus {
     outline: none; border-color: var(--brass);
   }
   .field input:disabled { color: var(--muted-2); }
-  .profile-grid {
-    display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px;
-    align-items: end; margin-top: 14px; padding: 14px; background: var(--panel-2);
-    border-radius: 6px;
-  }
-  .profile-save { min-height: 34px; }
-  .weight-inline { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-  .weight-inline input { width: 130px; }
   .ai-entry {
     display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px;
     align-items: end; margin: 14px 0 4px; padding: 14px; background: var(--panel-2);
@@ -1328,15 +1138,12 @@ const calibrateStyles = `
   @media (max-width: 860px) {
     .grid-top { grid-template-columns: 1fr; }
     .macro-grid { grid-template-columns: 1fr; gap: 16px; }
-    .profile-grid { grid-template-columns: 1fr 1fr; }
     .ai-entry { grid-template-columns: 1fr; }
     .cal-header { align-items: flex-start; }
   }
   @media (max-width: 560px) {
     .calibrate-app { padding: 20px 12px 42px; }
     .card { padding: 16px; }
-    .profile-grid, .weight-inline { grid-template-columns: 1fr; }
-    .weight-inline input { width: 100%; }
     .card-header-row { align-items: flex-start; flex-direction: column; }
   }
 `;

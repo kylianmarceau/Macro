@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Macro",
+  title: "Calibrate",
   description: "A signed-in calorie and macro tracker with meal estimation.",
   icons: {
     icon: "/favicon.svg",

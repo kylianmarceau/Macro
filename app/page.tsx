@@ -11,9 +11,9 @@ export default async function Home() {
     return (
       <main className="flex min-h-screen items-center justify-center bg-[#171310] px-6 text-[#F1E9DB]">
         <section className="w-full max-w-sm rounded-md border border-[rgba(241,233,219,0.09)] bg-[#221D17] p-6">
-          <p className="text-[26px] font-bold tracking-tight">MACRO</p>
+          <p className="text-[26px] font-bold tracking-tight">CALIBRATE</p>
           <p className="mt-1 text-[10.5px] font-medium uppercase tracking-[0.12em] text-[rgba(241,233,219,0.55)]">
-            AI intake calibration
+            Precision intake tracking
           </p>
           <h1 className="mt-6 text-xl font-semibold">Sign in to continue</h1>
           <a
