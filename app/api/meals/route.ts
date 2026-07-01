@@ -81,7 +81,19 @@ export async function GET(request: Request) {
 
     return Response.json({
       meals: (meals.results ?? []).map((meal) => ({
-        ...meal,
+        id: meal.id,
+        eatenAt: meal.eatenAt,
+        rawText: meal.rawText,
+        mealName: meal.mealName,
+        totals: {
+          calories: meal.calories,
+          proteinG: meal.proteinG,
+          carbsG: meal.carbsG,
+          fatG: meal.fatG,
+          fiberG: meal.fiberG,
+          sugarG: meal.sugarG,
+          sodiumMg: meal.sodiumMg,
+        },
         items: (itemsByMeal.get(meal.id) ?? []).map((item) => ({
           id: item.itemId,
           name: item.name,
